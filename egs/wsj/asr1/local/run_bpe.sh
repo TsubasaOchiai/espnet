@@ -15,7 +15,6 @@ dumpdir=dump   # directory to dump full features
 N=0            # number of minibatches to be used (mainly for debugging). "0" uses all minibatches.
 verbose=0      # verbose option
 resume=        # Resume the training from snapshot
-seed=1
 
 # feature configuration
 do_delta=false # true when using CNN
@@ -34,18 +33,11 @@ dlayers=1
 dunits=300
 # attention related
 atype=location
-adim=320
-awin=5
-aheads=4
 aconv_chans=10
 aconv_filts=100
 
 # hybrid CTC/attention
 mtlalpha=0.5
-
-# label smoothing
-lsm_type=unigram
-lsm_weight=0.05
 
 # minibatch related
 batchsize=30
@@ -71,13 +63,16 @@ recog_model=acc.best # set a model to be used for decoding: 'acc.best' or 'loss.
 wsj0=/export/corpora5/LDC/LDC93S6B
 wsj1=/export/corpora5/LDC/LDC94S13B
 
+# bpe
+nbpe=500
+
 # exp tag
 tag="" # tag for managing experiments.
 
 . utils/parse_options.sh || exit 1;
 
-. ./path.sh
-. ./cmd.sh
+. ./path.sh 
+. ./cmd.sh 
 
 # Set bash to 'debug' mode, it will exit on :
 # -e 'error', -u 'undefined variable', -o ... 'error in pipeline', -x 'print commands',
@@ -129,62 +124,57 @@ if [ ${stage} -le 1 ]; then
         data/${train_dev}/feats.scp data/${train_set}/cmvn.ark exp/dump_feats/dev ${feat_dt_dir}
 fi
 
-dict=data/lang_1char/${train_set}_units.txt
-nlsyms=data/lang_1char/non_lang_syms.txt
-
+dict=data/bpe/${train_set}_units_${nbpe}.txt
+code=data/bpe/code_${nbpe}.txt
+nlsyms=data/bpe/non_lang_syms.txt
 echo "dictionary: ${dict}"
 if [ ${stage} -le 2 ]; then
     ### Task dependent. You have to check non-linguistic symbols used in the corpus.
     echo "stage 2: Dictionary and Json Data Preparation"
-    mkdir -p data/lang_1char/
+    mkdir -p data/bpe
+    echo "<unk> 1" > ${dict} # <unk> must be 1, 0 will be used for "blank" in CTC
+    cut -f 2- -d" " data/${train_set}/text | learn_bpe.py -s ${nbpe} > ${code}
+    cut -f 2- -d" " data/${train_set}/text | apply_bpe.py -c ${code} \
+	    | tr ' ' '\n' | sort | uniq | awk '{print $0 " " NR+1}' >> ${dict}
+    wc -l ${dict}
 
     echo "make a non-linguistic symbol list"
     cut -f 2- data/${train_set}/text | tr " " "\n" | sort | uniq | grep "<" > ${nlsyms}
     cat ${nlsyms}
-
-    echo "make a dictionary"
-    echo "<unk> 1" > ${dict} # <unk> must be 1, 0 will be used for "blank" in CTC
-    text2token.py -s 1 -n 1 -l ${nlsyms} data/${train_set}/text | cut -f 2- -d" " | tr " " "\n" \
-    | sort | uniq | grep -v -e '^\s*$' | awk '{print $0 " " NR+1}' >> ${dict}
-    wc -l ${dict}
-
+    
     echo "make json files"
-    data2json.sh --feat ${feat_tr_dir}/feats.scp --nlsyms ${nlsyms} \
-         data/${train_set} ${dict} > ${feat_tr_dir}/data.json
-    data2json.sh --feat ${feat_dt_dir}/feats.scp --nlsyms ${nlsyms} \
-         data/${train_dev} ${dict} > ${feat_dt_dir}/data.json
+    data2json.sh --feat ${feat_tr_dir}/feats.scp --bpecode ${code} \
+         data/${train_set} ${dict} > ${feat_tr_dir}/data_${nbpe}.json
+    data2json.sh --feat ${feat_dt_dir}/feats.scp --bpecode ${code} \
+         data/${train_dev} ${dict} > ${feat_dt_dir}/data_${nbpe}.json
 fi
 
-# It takes a few days. If you just want to end-to-end ASR without LM,
 # you can skip this and remove --rnnlm option in the recognition (stage 5)
-lmexpdir=exp/train_rnnlm_2layer_bs2048
+lmexpdir=exp/train_rnnlm_2layer_bs2048_bpe${nbpe}
 mkdir -p ${lmexpdir}
 if [ ${stage} -le 3 ]; then
     echo "stage 3: LM Preparation"
     lmdatadir=data/local/lm_train
     mkdir -p ${lmdatadir}
-    text2token.py -s 1 -n 1 -l ${nlsyms} data/${train_set}/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
-        > ${lmdatadir}/train_trans.txt
+    cut -f 2- -d" " data/${train_set}/text | apply_bpe.py -c ${code} | perl -pe 's/\n/ <eos> /g' \
+        > ${lmdatadir}/train_trans_${nbpe}.txt
     zcat ${wsj1}/13-32.1/wsj1/doc/lng_modl/lm_train/np_data/{87,88,89}/*.z | grep -v "<" | tr [a-z] [A-Z] \
-        | text2token.py -n 1 | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' >> ${lmdatadir}/train_others.txt
-    cat ${lmdatadir}/train_trans.txt ${lmdatadir}/train_others.txt | tr '\n' ' ' > ${lmdatadir}/train.txt
-    text2token.py -s 1 -n 1 -l ${nlsyms} data/${train_dev}/text | cut -f 2- -d" " | perl -pe 's/\n/ <eos> /g' \
-        > ${lmdatadir}/valid.txt
+        | apply_bpe.py -c ${code} | perl -pe 's/\n/ <eos> /g' >> ${lmdatadir}/train_others_${nbpe}.txt
+    cat ${lmdatadir}/train_trans_${nbpe}.txt ${lmdatadir}/train_others_${nbpe}.txt | tr '\n' ' ' > ${lmdatadir}/train_${nbpe}.txt
+    cut -f 2- -d" " data/${train_dev}/text | apply_bpe.py -c ${code} | perl -pe 's/\n/ <eos> /g' \
+        > ${lmdatadir}/valid_${nbpe}.txt
     ${cuda_cmd} ${lmexpdir}/train.log \
         lm_train.py \
         --gpu ${gpu} \
         --verbose 1 \
         --outdir ${lmexpdir} \
-        --train-label ${lmdatadir}/train.txt \
-        --valid-label ${lmdatadir}/valid.txt \
+        --train-label ${lmdatadir}/train_${nbpe}.txt \
+        --valid-label ${lmdatadir}/valid_${nbpe}.txt \
         --dict ${dict}
 fi
 
 if [ -z ${tag} ]; then
-    expdir=exp/${train_set}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_ctc${ctctype}_d${dlayers}_unit${dunits}_${atype}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
-    if [ "${lsm_type}" != "" ]; then
-        expdir=${expdir}_lsm${lsm_type}${lsm_weight}
-    fi
+    expdir=exp/${train_set}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_ctc${ctctype}_d${dlayers}_unit${dunits}_${atype}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}_bpe${nbpe}
     if ${do_delta}; then
         expdir=${expdir}_delta
     fi
@@ -193,13 +183,21 @@ else
 fi
 mkdir -p ${expdir}
 
+# switch backend
+if [[ ${backend} == chainer ]]; then
+    train_script=asr_train.py
+    decode_script=asr_recog.py
+else
+    train_script=asr_train_th.py
+    decode_script=asr_recog_th.py
+fi
+
 if [ ${stage} -le 4 ]; then
     echo "stage 4: Network Training"
 
     ${cuda_cmd} ${expdir}/train.log \
-        asr_train.py \
+        ${train_script} \
         --gpu ${gpu} \
-        --backend ${backend} \
         --outdir ${expdir}/results \
         --debugmode ${debugmode} \
         --dict ${dict} \
@@ -207,11 +205,10 @@ if [ ${stage} -le 4 ]; then
         --minibatches ${N} \
         --verbose ${verbose} \
         --resume ${resume} \
-        --seed ${seed} \
         --train-feat scp:${feat_tr_dir}/feats.scp \
         --valid-feat scp:${feat_dt_dir}/feats.scp \
-        --train-label ${feat_tr_dir}/data.json \
-        --valid-label ${feat_dt_dir}/data.json \
+        --train-label ${feat_tr_dir}/data_${nbpe}.json \
+        --valid-label ${feat_dt_dir}/data_${nbpe}.json \
         --etype ${etype} \
         --elayers ${elayers} \
         --eunits ${eunits} \
@@ -221,14 +218,9 @@ if [ ${stage} -le 4 ]; then
         --dlayers ${dlayers} \
         --dunits ${dunits} \
         --atype ${atype} \
-        --adim ${adim} \
-        --awin ${awin} \
-        --aheads ${aheads} \
         --aconv-chans ${aconv_chans} \
         --aconv-filts ${aconv_filts} \
         --mtlalpha ${mtlalpha} \
-        --lsm-type ${lsm_type} \
-        --lsm-weight ${lsm_weight} \
         --batch-size ${batchsize} \
         --maxlen-in ${maxlen_in} \
         --maxlen-out ${maxlen_out} \
@@ -256,17 +248,16 @@ if [ ${stage} -le 5 ]; then
         fi
 
         # make json labels for recognition
-        data2json.sh --nlsyms ${nlsyms} ${data} ${dict} > ${data}/data.json
+        data2json.sh --bpecode ${code} ${data} ${dict} > ${data}/data_${nbpe}.json
 
         #### use CPU for decoding
         gpu=-1
 
         ${decode_cmd} JOB=1:${nj} ${expdir}/${decode_dir}/log/decode.JOB.log \
-            asr_recog.py \
+            ${decode_script} \
             --gpu ${gpu} \
-            --backend ${backend} \
             --recog-feat "$feats" \
-            --recog-label ${data}/data.json \
+            --recog-label ${data}/data_${nbpe}.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
             --model ${expdir}/results/model.${recog_model}  \
             --model-conf ${expdir}/results/model.conf  \
@@ -279,8 +270,8 @@ if [ ${stage} -le 5 ]; then
             --lm-weight ${lm_weight} &
         wait
 
-        score_sclite.sh --wer true --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict}
-
+        score_sclite.sh --bpe true --nlsyms ${nlsyms} ${expdir}/${decode_dir} ${dict}
+            
     ) &
     done
     wait
