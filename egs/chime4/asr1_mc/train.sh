@@ -92,13 +92,13 @@ mkdir -p ${expdir}
 
 # switch backend
 if [[ ${backend} == chainer ]]; then
-    train_script=me2e_asr_train.py
-    decode_script=me2e_asr_recog.py
+    train_script=asr_mc_train.py
+    decode_script=asr_mc_recog.py
 else
     echo "torch backend is not supported"
     exit
-#    train_script=me2e_asr_train_th.py
-#    decode_script=me2e_asr_recog_th.py
+#    train_script=asr_mc_train_th.py
+#    decode_script=asr_mc_recog_th.py
 fi
 
 # Only for this script

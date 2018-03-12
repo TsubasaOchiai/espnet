@@ -144,7 +144,7 @@ class ChainerSeqUpdaterKaldi(training.StandardUpdater):
         return sum([float(i) for i in six.itervalues(sq_sum)])
 
 
-def me2e_converter_kaldi(batch, readers):
+def me2e_converter_train(batch, readers):
     data = batch[0]
     mode = data[1]['mode']
 
@@ -174,6 +174,31 @@ def me2e_converter_kaldi(batch, readers):
 
     return batch
 
+
+def me2e_converter_recog(name, readers, mode):
+    # noisy mode
+    if mode == 'noisy':
+        bidim = readers[name].shape[1] / 2
+        # separate real and imaginary part
+        feat_real = readers[name][:,:bidim]
+        feat_imag = readers[name][:,bidim:]
+    # enhancement mode
+    elif mode == 'enhan':
+        bidim = readers[0][name].shape[1] / 2
+        # separate real and imaginary part
+        feat_real = [reader[name][:,:bidim] for reader in readers]
+        feat_imag = [reader[name][:,bidim:] for reader in readers]
+    else:
+        logging.error(
+            "Error: need to specify an appropriate decoding mode")
+        sys.exit()
+
+    feat = {}
+    feat['real'] = feat_real
+    feat['imag'] = feat_imag
+
+    return feat
+        
 
 def train(args):
     '''Run training'''
@@ -328,7 +353,7 @@ def train(args):
 
     # Set up a trainer
     updater = ChainerSeqUpdaterKaldi(
-        train_iter, optimizer, train_readers, gpu_id, me2e_converter_kaldi)
+        train_iter, optimizer, train_readers, gpu_id, me2e_converter_train)
     trainer = training.Trainer(
         updater, (args.epochs, 'epoch'), out=args.outdir)
 
@@ -338,7 +363,7 @@ def train(args):
 
     # Evaluate the model with the test dataset for each epoch
     trainer.extend(ChainerSeqEvaluaterKaldi(
-        valid_iter, model, valid_readers, gpu_id, me2e_converter_kaldi))
+        valid_iter, model, valid_readers, gpu_id, me2e_converter_train))
 
     # Take a snapshot for each specified epoch
     trainer.extend(extensions.snapshot(), trigger=(1, 'epoch'))
@@ -415,10 +440,10 @@ def recog(args):
         logging.info('ARGS: ' + key + ': ' + str(vars(args)[key]))
 
     # get Mel-filterbank
-    melmat = read_mat(args.melmat)
+    melmat = kaldi_io_py.read_mat(train_args.melmat)
 
     # get cmvn statistics
-    stats = read_mat(args.cmvn)
+    stats = kaldi_io_py.read_mat(train_args.cmvn)
     dim = len(stats[0]) - 1
     count = stats[0][dim]
     cmvn_mean = stats[0][0:dim]/count
@@ -427,8 +452,8 @@ def recog(args):
 
     # specify model architecture
     logging.info('reading model parameters from' + args.model)
-    enhan = NB_MVDR(bidim, args)
-    asr = E2E(idim, odim, train_args)
+    enhan = NB_MVDR(bidim, train_args)
+    asr = E2E(eidim, odim, train_args)
     me2e = ME2E(enhan, asr, melmat, cmvn_stats)
     model = Loss(me2e, train_args.mtlalpha)
     chainer.serializers.load_npz(args.model, model)
@@ -442,11 +467,11 @@ def recog(args):
 
     # prepare Kaldi reader
     # noisy
-    names_noisy = [key for key,mat in kaldi_io.read_mat_scp(args.recog_feat_noisy)]
-    recog_reader_noisy = kaldi_io_py.read_dict_scp(args.recog_feat_noisy)
+    names_noisy = [key for key,mat in lazy_io.read_mat_scp(args.recog_feat_noisy)]
+    recog_reader_noisy = lazy_io.read_dict_scp(args.recog_feat_noisy)
     # enhan
-    names_enhan = [key for key,mat in kaldi_io.read_mat_scp(args.recog_feat_enhan)]
-    recog_reader_enhan = [kaldi_io_py.read_dict_scp(feat) for feat in args.recog_feat_enhan]
+    names_enhan = [key for key,mat in lazy_io.read_mat_scp(args.recog_feat_enhan[0])]
+    recog_reader_enhan = [lazy_io.read_dict_scp(feat) for feat in args.recog_feat_enhan]
 
     # read json data
     with open(args.recog_label_noisy, 'rb') as f:
@@ -466,7 +491,7 @@ def recog(args):
     new_json = {}
     for name in names:
         logging.info('decoding ' + name)
-        feat = me2e_converter_kaldi(name, recog_reader, args.mode)
+        feat = me2e_converter_recog(name, recog_reader, args.mode)
         y_hat = me2e.recognize(feat, args, train_args.char_list, rnnlm)
         y_true = map(int, recog_json[name]['tokenid'].split())
 

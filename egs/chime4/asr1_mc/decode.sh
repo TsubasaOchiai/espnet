@@ -58,6 +58,7 @@ recog_model=acc.best # set a model to be used for decoding: 'acc.best' or 'loss.
 cmvn=data-fbank/tr05_multi_noisy/cmvn.ark
 melmat=exp/make_melmat/melmat.ark
 mode="noisy+enhan" # training mode
+recogmode="enhan" # decoding mode
 
 # data
 chime4_data=/home/xtochiai/corpora/CHiME4
@@ -75,6 +76,8 @@ tag="" # tag for managing experiments.
 set -e
 set -u
 set -o pipefail
+
+train_set=tr05_multi_noisy
 
 if [ -z ${tag} ]; then
     expdir=exp/${mode}_${train_set}_${etype}_e${elayers}_subsample${subsample}_unit${eunits}_proj${eprojs}_d${dlayers}_unit${dunits}_${atype}_aconvc${aconv_chans}_aconvf${aconv_filts}_mtlalpha${mtlalpha}_${opt}_bs${batchsize}_mli${maxlen_in}_mlo${maxlen_out}
@@ -101,42 +104,44 @@ fi
 
 # Only for this script
 dict=data/lang_1char/${train_set}_units.txt
+nlsyms=data/lang_1char/non_lang_syms.txt
 
 recog_set="\
-dt05_real_noisy dt05_simu_noisy et05_real_noisy et05_simu_noisy
+dt05_real dt05_simu et05_real et05_simu
 "
 
 if [ ${stage} -le 4 ]; then
     echo "stage 4: Decoding"
-    nj=32
+#    nj=32
+    nj=8
 
     for rtask in ${recog_set}; do
     (
-        decode_dir=decode_${rtask}_beam${beam_size}_e${recog_model}_p${penalty}_len${minlenratio}-${maxlenratio}
+        decode_dir=decode_${recogmode}_${rtask}_beam${beam_size}_e${recog_model}_p${penalty}_len${minlenratio}-${maxlenratio}
 
         # noisy
         # split data
-        data=data-stft/${rtask}
+        data=data-stft/${rtask}_isolated_1ch_track
         split_data.sh --per-utt ${data} ${nj};
         # make json labels for recognition
         data2json.sh ${data} ${dict} > ${data}/data.json
         
-        recog_feat_noisy="scp:data-stft/${rtask}/split${nj}utt/JOB/feats.scp"
+        recog_feat_noisy="scp:data-stft/${rtask}_isolated_1ch_track/split${nj}utt/JOB/feats.scp"
 
         # enhan
         # split_data
-        for ch in ${stft_ch}:
-            data=data-stft/${rtask}_ch${ch}
+        stft_ch="1 3 4 5 6"
+        for ch in ${stft_ch}; do
+            data=data-stft/${rtask}_noisy_ch${ch}
             split_data.sh --per-utt ${data} ${nj};
         done
         # make json labels for recognition
-        data=data-stft/${rtask}_ch1
+        data=data-stft/${rtask}_noisy_ch1
         data2json.sh ${data} ${dict} > ${data}/data.json
 
         recog_feat_enhan=""
-        stft_ch="1 3 4 5 6"
-        for ch in ${stft_ch}:
-            recog_feat_enhan="${recog_feat_enhan} scp:data-stft/${rtask}_ch${ch}/split${nj}utt/JOB/feats.scp"
+        for ch in ${stft_ch}; do
+            recog_feat_enhan="${recog_feat_enhan} scp:data-stft/${rtask}_noisy_ch${ch}/split${nj}utt/JOB/feats.scp"
         done
 
         #### use CPU for decoding
@@ -148,9 +153,9 @@ if [ ${stage} -le 4 ]; then
             --debugmode ${debugmode} \
             --verbose ${verbose} \
             --recog-feat-noisy ${recog_feat_noisy} \
-            --recog-label-noisy data-stft/${rtask}/data.json \
+            --recog-label-noisy data-stft/${rtask}_isolated_1ch_track/data.json \
             --recog-feat-enhan ${recog_feat_enhan} \
-            --recog-label-enhan data-stft/${rtask}_ch1/data.json \
+            --recog-label-enhan data-stft/${rtask}_noisy_ch1/data.json \
             --result-label ${expdir}/${decode_dir}/data.JOB.json \
             --model ${expdir}/results/model.${recog_model}  \
             --model-conf ${expdir}/results/model.conf  \
@@ -158,9 +163,7 @@ if [ ${stage} -le 4 ]; then
             --penalty ${penalty} \
             --maxlenratio ${maxlenratio} \
             --minlenratio ${minlenratio} \
-            --melmat ${melmat} \
-            --cmvn ${cmvn} \
-            --mode ${mode} \
+            --mode ${recogmode} \
             &
         wait
 

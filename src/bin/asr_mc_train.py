@@ -186,11 +186,11 @@ def main():
     # train
     logging.info('backend = ' + args.backend)
     if args.backend == "chainer":
-        from me2e_asr_chainer import train
+        from asr_mc_chainer import train
         train(args)
     elif args.backend == "pytorch":
         raise NotImplementedError('currently, pytorch is not supported.')
-        from me2e_asr_pytorch import train
+        from asr_mc_pytorch import train
         train(args)
     else:
         raise ValueError("chainer and pytorch are only supported.")

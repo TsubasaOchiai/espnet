@@ -184,7 +184,7 @@ class ME2E(chainer.Chain):
         '''
         logging.info('mode: ' + recog_args.mode)
 
-        if mode == 'noisy':
+        if recog_args.mode == 'noisy':
             x_real = x['real']
             x_imag = x['imag']
             ilen = self.xp.array(x_real.shape[0], dtype=np.int32)
@@ -192,10 +192,10 @@ class ME2E(chainer.Chain):
             h_imag = chainer.Variable(self.xp.array(x_imag, dtype=np.float32))
 
             # make a utt list (1) to use the same interface for encoder
-            h = {}
-            h['real'] = [h_real]
-            h['imag'] = [h_imag]
-        elif mode == 'enhan':
+            hs = {}
+            hs['real'] = [h_real]
+            hs['imag'] = [h_imag]
+        elif recog_args.mode == 'enhan':
             x_real = x['real']
             x_imag = x['imag']
             ilen = self.xp.array(x_real[0].shape[0], dtype=np.int32)
@@ -203,9 +203,9 @@ class ME2E(chainer.Chain):
             h_imag = [chainer.Variable(self.xp.array(ch, dtype=np.float32)) for ch in x_imag]
 
             # make a utt list (1) to use the same interface for encoder
-            h = {}
-            h['real'] = [h_real]
-            h['imag'] = [h_imag]
+            hs = {}
+            hs['real'] = [h_real]
+            hs['imag'] = [h_imag]
 
             # 1. beamformer
             hs = self.enhan(hs)
@@ -219,13 +219,19 @@ class ME2E(chainer.Chain):
 
         with chainer.no_backprop_mode(), chainer.using_config('train', False):
             # 1. encoder
-            h, _ = self.enc(h, ilen)
+            hs, _ = self.asr.enc(hs, ilen)
+
+            # calculate log P(z_t|X) for CTC scores
+            if recog_args.ctc_weight > 0.0:
+                lpz = self.ctc.log_softmax(h).data[0]
+            else:
+                lpz = None
 
             # 2. decoder
             # decode the first utterance
             if recog_args.beam_size == 1:
-                y = self.dec.recognize(h[0], recog_args, rnnlm)
+                y = self.asr.dec.recognize(hs[0], recog_args, rnnlm)
             else:
-                y = self.dec.recognize_beam(h[0], recog_args, char_list, rnnlm)
+                y = self.asr.dec.recognize_beam(hs[0], lpz, recog_args, char_list, rnnlm)
 
             return y

@@ -28,20 +28,18 @@ def main():
     parser.add_argument('--verbose', '-V', default=1, type=int,
                         help='Verbose option')
     # task related
+    parser.add_argument('--result-label', type=str, required=True,
+                        help='Filename of result label data (json)')
     # noisy
     parser.add_argument('--recog-feat-noisy', type=str, required=True,
                         help='Filename of recognition feature data (Kaldi scp) without enhancemet')
     parser.add_argument('--recog-label-noisy', type=str, required=True,
                         help='Filename of recognition label data (json) without enhancement')
-    parser.add_argument('--result-label-noisy', type=str, required=True,
-                        help='Filename of result label data (json) without enhancement')
     # enhan
     parser.add_argument('--recog-feat-enhan', type=str, nargs='*', required=True,
                         help='Filename of recognition feature data (Kaldi scp) with enhancemet')
     parser.add_argument('--recog-label-enhan', type=str, required=True,
                         help='Filename of recognition label data (json) with enhancement')
-    parser.add_argument('--result-label-enhan', type=str, required=True,
-                        help='Filename of result label data (json) with enhancement')
     # model (parameter) related
     parser.add_argument('--model', type=str, required=True,
                         help='Model file parameters to read')
@@ -66,12 +64,8 @@ def main():
     parser.add_argument('--lm-weight', default=0.1, type=float,
                         help='RNNLM weight.')
     # me2e
-    parser.add_argument('--melmat', type=str, required=True,
-                        help='Filename of Mel-filterbank matrix data (Kaldi ark)')
-    parser.add_argument('--cmvn', type=str, required=True,
-                        help='Filename of cmvn statistics data (Kaldi ark)')
     parser.add_argument('--mode', default=None, type=str, required=True,
-                        choices=['noisy', 'enhan'],
+                        choices=['noisy', 'enhan'])
     args = parser.parse_args()
 
     # logging info
@@ -97,11 +91,11 @@ def main():
     # recog
     logging.info('backend = ' + args.backend)
     if args.backend == "chainer":
-        from me2e_asr_chainer import recog
+        from asr_mc_chainer import recog
         recog(args)
     elif args.backend == "pytorch":
         raise NotImplementedError('currently, pytorch is not supported.')
-        from me2e_asr_pytorch import recog
+        from asr_mc_pytorch import recog
         recog(args)
     else:
         raise ValueError("chainer and pytorch are only supported.")
